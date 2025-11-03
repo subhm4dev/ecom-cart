@@ -32,7 +32,7 @@ import org.springframework.web.bind.annotation.*;
  * abandoned carts. Cart keys follow pattern: `cart:{tenantId}:{userId}`.
  */
 @RestController
-@RequestMapping("/v1/cart")
+@RequestMapping("/api/v1/cart")
 @Tag(name = "Shopping Cart", description = "Shopping cart management endpoints")
 @SecurityRequirement(name = "bearerAuth")
 public class CartController {
