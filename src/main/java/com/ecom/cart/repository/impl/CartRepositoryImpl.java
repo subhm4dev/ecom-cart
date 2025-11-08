@@ -2,12 +2,15 @@ package com.ecom.cart.repository.impl;
 
 import com.ecom.cart.model.Cart;
 import com.ecom.cart.repository.CartRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -23,6 +26,7 @@ public class CartRepositoryImpl implements CartRepository {
     private static final long DEFAULT_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
     
     private final RedisTemplate<String, Object> redisTemplate;
+    private final @Qualifier("redisObjectMapper") ObjectMapper redisObjectMapper;
     
     private String buildKey(UUID tenantId, UUID userId) {
         return CART_KEY_PREFIX + tenantId + ":" + userId;
@@ -31,8 +35,43 @@ public class CartRepositoryImpl implements CartRepository {
     @Override
     public Optional<Cart> findByTenantIdAndUserId(UUID tenantId, UUID userId) {
         String key = buildKey(tenantId, userId);
-        Cart cart = (Cart) redisTemplate.opsForValue().get(key);
-        return Optional.ofNullable(cart);
+        
+        try {
+            Object value = redisTemplate.opsForValue().get(key);
+            
+            if (value == null) {
+                return Optional.empty();
+            }
+            
+            // Handle deserialization: GenericJackson2JsonRedisSerializer may return LinkedHashMap
+            // or the deserialization may fail due to missing type information
+            if (value instanceof Cart) {
+                return Optional.of((Cart) value);
+            } else if (value instanceof LinkedHashMap) {
+                // Convert LinkedHashMap to Cart using ObjectMapper
+                try {
+                    Cart cart = redisObjectMapper.convertValue(value, Cart.class);
+                    return Optional.of(cart);
+                } catch (Exception e) {
+                    log.error("Failed to convert LinkedHashMap to Cart: {}", e.getMessage());
+                    // If conversion fails, delete the corrupted entry
+                    redisTemplate.delete(key);
+                    return Optional.empty();
+                }
+            } else {
+                log.warn("Unexpected type from Redis: {}", value.getClass().getName());
+                return Optional.empty();
+            }
+        } catch (org.springframework.data.redis.serializer.SerializationException e) {
+            // Handle deserialization errors (e.g., missing @class property in old data)
+            log.warn("Failed to deserialize cart from Redis (key: {}), deleting corrupted entry: {}", key, e.getMessage());
+            try {
+                redisTemplate.delete(key);
+            } catch (Exception deleteEx) {
+                log.error("Failed to delete corrupted cart entry: {}", deleteEx.getMessage());
+            }
+            return Optional.empty();
+        }
     }
     
     @Override
